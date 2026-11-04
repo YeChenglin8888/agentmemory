@@ -22,6 +22,7 @@ describe("generated REST endpoint methods", () => {
       { path: "/agentmemory/counts", method: "GET" },
       { path: "/agentmemory/compression", method: "GET" },
       { path: "/agentmemory/compression/retry", method: "POST" },
+      { path: "/agentmemory/lessons/get", method: "POST" },
     ]));
   });
 

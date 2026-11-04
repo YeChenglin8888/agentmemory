@@ -3,7 +3,7 @@ import { registerApiTriggers } from "../src/triggers/api.js";
 
 type Handler = (req: unknown) => Promise<{ status_code: number; body: Record<string, unknown> }>;
 
-function setup() {
+function setup(secret?: string) {
   const kv = {
     get: vi.fn(async (): Promise<unknown> => null),
     set: vi.fn(async (_scope: string, _key: string, value: unknown) => value),
@@ -21,8 +21,8 @@ function setup() {
     trigger,
     on: () => {},
   };
-  registerApiTriggers(sdk as never, kv as never);
-  const call = (id: string, req: { body?: unknown; query_params?: Record<string, string> }) =>
+  registerApiTriggers(sdk as never, kv as never, secret);
+  const call = (id: string, req: { body?: unknown; headers?: Record<string, string>; query_params?: Record<string, string> }) =>
     handlers.get(id)!({ headers: {}, query_params: {}, body: {}, ...req });
   return { call, trigger, kv };
 }
@@ -43,9 +43,16 @@ describe("POST /agentmemory/lessons/get", () => {
   it("does not return another project's lesson when the caller names no project", async () => {
     const { call, kv } = setup();
     kv.get.mockResolvedValueOnce({ id: "lsn_1", project: "other", content: "private" });
+    kv.get.mockResolvedValueOnce({ id: "lsn_1", project: "other", content: "private" });
 
     expect((await call("api::lesson-get", { body: { lessonId: "lsn_1" } })).status_code).toBe(404);
     expect((await call("api::lesson-get", { body: { lessonId: "lsn_1", project: "app" } })).status_code).toBe(404);
+  });
+
+  it("requires the configured bearer token", async () => {
+    const { call } = setup("test-secret");
+
+    expect((await call("api::lesson-get", { body: { lessonId: "lsn_1" } })).status_code).toBe(401);
   });
 
   it("returns a project-less lesson and hides a deleted one", async () => {

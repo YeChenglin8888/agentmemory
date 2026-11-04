@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import agentmemoryExtension from "../integrations/pi/index.js";
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
+});
 
 type Tool = { execute: (...args: never[]) => Promise<{ content: { text: string }[]; details?: unknown }> };
 type Handler = (event: never, ctx: never) => Promise<{ systemPrompt: string; message?: { content: string } }>;
@@ -26,6 +29,7 @@ function loadPi(): { tools: Map<string, Tool>; events: Map<string, Handler> } {
 
 describe("Pi lesson recall", () => {
   it("shows lessons in manual search, reads the full lesson by ID, and recalls both", async () => {
+    vi.stubEnv("AGENTMEMORY_PROJECT_NAME", "test-project");
     vi.stubGlobal("fetch", vi.fn(async (url: string) => {
       const href = String(url);
       if (href.endsWith("/health")) return json({ status: "healthy" });
@@ -43,6 +47,8 @@ describe("Pi lesson recall", () => {
 
     const full = await tools.get("memory_get_lesson")!.execute("call", { lessonId: "lsn_1" } as never);
     expect(full.content[0].text).toBe(LESSON_FULL);
+    const lessonRequest = vi.mocked(fetch).mock.calls.find(([url]) => String(url).endsWith("/lessons/get"));
+    expect(JSON.parse(String(lessonRequest?.[1]?.body))).toEqual({ lessonId: "lsn_1", project: "test-project" });
 
     const recalled = await events.get("before_agent_start")!(
       { prompt: "index", systemPrompt: "Base prompt" } as never,
@@ -50,6 +56,28 @@ describe("Pi lesson recall", () => {
     );
     expect(recalled.message?.content).toContain(LESSON_PREVIEW);
     expect(recalled.message?.content).toContain("lessonId: lsn_1");
+  });
+
+  it("keeps ordinary memories and lessons together in search and automatic recall", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+      if (String(url).endsWith("/health")) return json({ status: "healthy" });
+      return json({
+        results: [{ title: "Ordinary memory", narrative: "Use pnpm for installs" }],
+        lessons: [{ lessonId: "lsn_1", content: LESSON_PREVIEW, score: 0.9 }],
+      });
+    }));
+
+    const { tools, events } = loadPi();
+    const search = await tools.get("memory_search")!.execute("call", { query: "install" } as never);
+    expect(search.content[0].text).toContain("Use pnpm for installs");
+    expect(search.content[0].text).toContain(LESSON_PREVIEW);
+
+    const recalled = await events.get("before_agent_start")!(
+      { prompt: "install", systemPrompt: "Base prompt" } as never,
+      { cwd: process.cwd() } as never,
+    );
+    expect(recalled.message?.content).toContain("Use pnpm for installs");
+    expect(recalled.message?.content).toContain(LESSON_PREVIEW);
   });
 
   it("reports an unreachable server without claiming the lesson is missing", async () => {
@@ -68,6 +96,7 @@ describe("Pi lesson recall", () => {
   });
 
   it("says a lesson is missing only when the API answers 404", async () => {
+    vi.stubEnv("AGENTMEMORY_PROJECT_NAME", "test-project");
     vi.stubGlobal("fetch", vi.fn(async (url: string) => {
       const href = String(url);
       if (href.endsWith("/health")) return json({ status: "healthy" });
@@ -80,5 +109,7 @@ describe("Pi lesson recall", () => {
 
     expect(result.content[0].text).toContain("No lesson lsn_9");
     expect(result.content[0].text).not.toContain("Could not retrieve");
+    const lessonRequest = vi.mocked(fetch).mock.calls.find(([url]) => String(url).endsWith("/lessons/get"));
+    expect(JSON.parse(String(lessonRequest?.[1]?.body))).toEqual({ lessonId: "lsn_9", project: "test-project" });
   });
 });
